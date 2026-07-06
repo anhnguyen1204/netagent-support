@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+langgraph
+langchain-core
+qdrant-client
+sentence-transformers
+pandas
+pyarrow
+pydantic
+apscheduler
+python-dotenv
+pytest
