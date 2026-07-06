@@ -12,7 +12,7 @@ from src.agents.answerer import answer
 from src.agents.critic import critique
 from src.agents.orchestrator import orchestrate
 from src.agents.retrieval import retrieve
-from src.agents.state import AgentState
+from src.agents.state import AgentState, Turn
 from src.alerts.base import AlertRecord, Alerter
 from src.config import GateThresholds
 from src.kb.store import KBStore
@@ -86,7 +86,7 @@ def build_graph(
     return graph.compile()
 
 
-def run_graph(graph, question: str) -> AgentState:
-    result = graph.invoke(AgentState(question=question))
+def run_graph(graph, question: str, history: list[Turn] | None = None) -> AgentState:
+    result = graph.invoke(AgentState(question=question, history=history or []))
     # langgraph returns the state as a dict-like; normalize back to AgentState
     return AgentState.model_validate(result)

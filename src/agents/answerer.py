@@ -14,22 +14,28 @@ NO_ANSWER = "Xin lỗi, hiện chưa tìm thấy giải pháp phù hợp trong c
 
 POLISH_PROMPT = """You are a Vietnamese technical support assistant for the netAgent
 platform. Using ONLY the verified solution below, write a concise, friendly answer to the
-user's question in Vietnamese. Do not invent details beyond the solution. Cite nothing
-extra.
-
-User question: {question}
+user's latest message in Vietnamese. Do not invent details beyond the solution. If earlier
+conversation is shown, keep your answer consistent with it (e.g. the user may be asking a
+follow-up).
+{history_block}
+User's latest message: {question}
 Verified problem: {problem}
 Verified solution: {solution}
 
 Answer:"""
 
 
+def _history_block(state: AgentState) -> str:
+    if not state.history:
+        return ""
+    lines = "\n".join(f"- User: {t.question}\n  Assistant: {t.answer[:200]}" for t in state.history)
+    return f"\nEarlier conversation:\n{lines}\n"
+
+
 def _template_answer(top: ScoredKBEntry) -> str:
-    source = top.entry.source_thread_id
     return (
         f"Vấn đề tương tự đã gặp: {top.entry.problem}\n"
         f"→ Giải pháp: {top.entry.solution}\n"
-        f"(nguồn: {source})"
     )
 
 
@@ -42,7 +48,10 @@ def answer(state: AgentState, llm: LLMClient | None) -> AgentState:
 
     if llm is not None and not isinstance(llm, NullLLM):
         prompt = POLISH_PROMPT.format(
-            question=state.question, problem=top.entry.problem, solution=top.entry.solution
+            history_block=_history_block(state),
+            question=state.question,
+            problem=top.entry.problem,
+            solution=top.entry.solution,
         )
         try:
             polished = llm.complete(prompt).strip()

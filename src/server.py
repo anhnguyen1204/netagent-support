@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from qdrant_client import QdrantClient
 
 from src.agents.graph import build_graph, run_graph
+from src.agents.memory import ConversationStore
 from src.alerts.console_alerter import ConsoleAlerter
 from src.alerts.email_alerter import EmailAlerter
 from src.config import load_settings
@@ -105,6 +106,7 @@ async def lifespan(app: FastAPI):
     )
     scheduler.start()
     app.state.scheduler = scheduler
+    app.state.conversations = ConversationStore()
     logger.info("agent graph + spike monitor ready (LLM_BACKEND=%s)", settings.llm_backend)
 
     yield
@@ -121,6 +123,9 @@ class HealthResponse(BaseModel):
 
 class AskRequest(BaseModel):
     question: str
+    # optional: pass a stable id to make questions part of one multi-turn conversation.
+    # omit it (or send null) for a stateless one-shot ask.
+    session_id: str | None = None
 
 
 class AskResponse(BaseModel):
@@ -128,6 +133,7 @@ class AskResponse(BaseModel):
     confidence: float
     decision: str
     source_thread_id: str | None = None
+    session_id: str | None = None
 
 
 @app.get("/", include_in_schema=False)
@@ -147,11 +153,19 @@ def ask(request: AskRequest) -> AskResponse:
     _, _, topic, _ = _rule_based_classify(request.question)
     app.state.spike_monitor.record(topic, time.time() * 1000)
 
-    state = run_graph(app.state.graph, request.question)
+    # load prior turns for this session (empty if no session_id or first message)
+    history = app.state.conversations.history(request.session_id)
+
+    state = run_graph(app.state.graph, request.question, history=history)
     source = state.retrieved[0].entry.source_thread_id if state.retrieved else None
+
+    # remember this turn so the next message in the session has context
+    app.state.conversations.append(request.session_id, request.question, state.answer or "")
+
     return AskResponse(
         answer=state.answer or "",
         confidence=state.confidence if state.confidence is not None else 0.0,
         decision=state.decision or "escalate",
         source_thread_id=source,
+        session_id=request.session_id,
     )

@@ -65,6 +65,9 @@
       escalate: "Chuyển KTV xử lý",
     };
 
+    // one conversation per page load, so follow-up questions have context
+    const SESSION_ID = "web-" + Math.random().toString(36).slice(2);
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const question = input.value.trim();
@@ -78,7 +81,7 @@
         const res = await fetch("/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question }),
+          body: JSON.stringify({ question, session_id: SESSION_ID }),
         });
         const data = await res.json();
         pending.textContent = data.answer || "(không có câu trả lời)";

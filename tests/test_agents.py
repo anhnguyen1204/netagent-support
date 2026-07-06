@@ -64,11 +64,11 @@ def test_retrieve_middle_band_kept_on_llm_yes():
     assert len(state.retrieved) == 1
 
 
-def test_answer_template_cites_source():
+def test_answer_template_includes_problem_and_solution():
     state = AgentState(question="q", retrieved=[make_scored("mất publish", "kiểm tra vmail", "workflow_publish", 0.9)])
     out = answer(state, NullLLM())
-    assert "kiểm tra vmail" in out.answer
-    assert "nguồn" in out.answer
+    assert "kiểm tra vmail" in out.answer  # solution
+    assert "mất publish" in out.answer  # problem
 
 
 def test_answer_no_results_returns_apology():

@@ -74,6 +74,19 @@ curl -X POST localhost:8000/ask \
   -d '{"question":"workflow của em bị mất publish"}'
 ```
 
+**Multi-turn conversation:** pass a stable `session_id` to make questions part of one
+conversation — the system carries context so follow-ups work (a follow-up like "nguyên
+nhân của nó là gì?" is resolved against the earlier turn). Requires an LLM backend for
+the history-aware query rewriting; omit `session_id` for stateless one-shot asks. The web
+UI sets a session automatically per page load.
+
+```bash
+curl -X POST localhost:8000/ask -H "Content-Type: application/json" \
+  -d '{"question":"workflow của em bị mất publish","session_id":"abc"}'
+curl -X POST localhost:8000/ask -H "Content-Type: application/json" \
+  -d '{"question":"nguyên nhân của nó là gì?","session_id":"abc"}'   # understands "nó"
+```
+
 Response:
 
 ```json
