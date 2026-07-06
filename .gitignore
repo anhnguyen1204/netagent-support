@@ -28,3 +28,4 @@ data/golden_set.xlsx
 
 # OS
 .DS_Store
+*.docx
