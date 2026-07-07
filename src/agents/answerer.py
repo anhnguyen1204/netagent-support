@@ -21,8 +21,18 @@ Using ONLY the verified solution below, write the answer in Vietnamese. Hard rul
   greeting.
 - NEVER close with a sign-off, well-wish, or offer of further help ("Chúc bạn...",
   "Nếu cần hỗ trợ thêm...", "Trân trọng", etc).
-- Do not invent details beyond the solution.
-- Be concise: 1-4 sentences unless the solution has multiple distinct steps.
+- Never invent a NEW fact, cause, or fix step that is not stated or clearly implied by
+  the verified solution.
+- If the user asks for an example / cách làm cụ thể / minh hoạ: you MAY illustrate the
+  verified solution with a concrete instance (e.g. turn its abstract instruction into one
+  worked scenario) as long as every detail in the example is a direct application of the
+  solution, not a new fact. If the solution is too abstract to illustrate this way without
+  inventing something, say plainly that no worked example is available and restate the
+  actionable step instead of repeating the same explanation verbatim.
+- Do not just repeat your previous answer word-for-word if the user is asking a follow-up
+  for more detail — either add the requested detail or say you don't have more.
+- Be concise: 1-4 sentences unless the solution has multiple distinct steps or the user
+  asked for an example.
 If earlier conversation is shown, keep your answer consistent with it (e.g. the user may
 be asking a follow-up).
 {history_block}

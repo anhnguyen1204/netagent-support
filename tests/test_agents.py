@@ -101,6 +101,22 @@ def test_answer_prompt_forbids_greeting_and_signoff():
     assert "NEVER close with" in prompt
 
 
+def test_answer_prompt_permits_illustrating_examples():
+    # regression guard: a user asking "lấy ví dụ cách làm giúp tôi" (give me an example)
+    # used to get the exact same abstract explanation repeated verbatim, because the
+    # prompt forbade "inventing details beyond the solution" -- which also blocked any
+    # concrete illustration of it. The prompt must allow illustrating the verified
+    # solution with one worked instance, while still forbidding new facts/causes/fixes.
+    from tests.conftest import FakeLLM
+
+    llm = FakeLLM(reply="placeholder")
+    state = AgentState(question="lấy ví dụ cách làm giúp tôi", retrieved=[make_scored("p", "s", "llm_model", 0.9)])
+    answer(state, llm)
+    prompt = llm.calls[0]
+    assert "you MAY illustrate the" in prompt
+    assert "not just repeat your previous answer word-for-word" in prompt.lower()
+
+
 def test_critic_auto_reply_on_strong_match():
     # score 0.9 * confidence 0.95 = 0.855 >= 0.75
     state = AgentState(question="q", retrieved=[make_scored("p", "s", "credential", 0.9, confidence=0.95)])
