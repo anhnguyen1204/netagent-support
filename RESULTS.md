@@ -134,13 +134,14 @@ spike monitor — only the thread→KB extraction was dropped.)
   separate good pairings from bad on this data. That 1-entry result is what motivated
   going curated-only.
 
-### Curated KB (`data/curated_kb.csv`, 39 entries)
+### Curated KB (`data/curated_kb.csv`, 40 entries)
 
-39 hand-curated problem→solution pairs, each read directly out of the raw chat and
+40 hand-curated problem→solution pairs, each read directly out of the raw chat and
 grounded in a real staff answer (not invented). Marked `source_thread_id="curated"`,
-confidence 0.95. Topic coverage: node_feature ×12, llm_model ×6, connection_access ×5,
+confidence 0.95. Topic coverage: node_feature ×13, llm_model ×6, connection_access ×5,
 datatable ×4, credential ×3, workflow_run ×3, workflow_publish ×2, email ×2,
-infra_incident ×2 — all 9 non-trivial topics represented.
+infra_incident ×2 — all 9 non-trivial topics represented. (One entry added later, see
+"Gate threshold + KB gap" below, for a vmail-timezone issue the original 39 missed.)
 
 **`store.search()` retrieval verified across 12 diverse real queries — every one
 returns the correct topic + a relevant solution as the top hit**, scores 0.61–0.88:
@@ -286,3 +287,38 @@ leakage mid-answer from `qwen2.5:7b` — not reproduced in a larger follow-up sa
 (0/12), likely a rare sampling artifact rather than something the prompt reliably
 triggers. Not defended against in code; noted here as a residual risk to watch for if
 it recurs at a higher rate.
+
+## Gate threshold + KB gap (confident wrong answer)
+
+User-reported: "Get many trên vmail đang sai thời gian ở phần output" got a fluent,
+confident-sounding **wrong** answer — the system explained "the LLM doesn't know the
+current date, add time context to the prompt" (a real KB entry, about a different
+problem) instead of the actual cause. Traced the real staff answer sitting right next
+to the customer's message in the raw chat: Vmail returns data in UTC by default, +7h
+needed for correct VN time — a distinct issue the curated 39 simply had no entry for.
+Retrieval matched the nearest wrong-topic entry (`llm_model`, "model trả về sai thời
+gian") because it superficially shares "sai thời gian" (wrong time) with the real
+problem, and the composite score (0.58) was high enough to clear the old
+`suggest_to_staff_min` (0.45) and get shown as if confident.
+
+Two fixes:
+1. **Added the missing KB entry** (39 → 40) with the real answer. Retrieval now matches
+   it at 0.830 — a clean, unambiguous margin over the previously-wrong match (0.606).
+2. **Raised `suggest_to_staff_min` 0.45 → 0.55**, calibrated against measured composite
+   scores on 12 known-correct queries (0.62–0.76, see the Curated KB section above).
+   0.55 sits with real margin below that floor: it filters weak/wrong-topic matches
+   (the reported case's 0.58 would now correctly escalate instead of being shown, even
+   without fix #1) without risking a genuinely correct medium-confidence match being
+   escalated instead of shown.
+
+**Structural takeaway**: 40 curated entries cannot cover every real issue in the
+dataset — any question whose topic isn't in the KB will retrieve the *nearest*
+existing entry, and if that entry is fluent enough, an LLM can synthesize a confident-
+sounding wrong answer rather than visibly failing. The gate threshold is a blunt,
+partial mitigation (catches low-score cases); the only real fix per-gap is adding the
+missing KB entry, discovered the same way this one was — a human noticing the answer is
+wrong and checking the raw chat for what actually happened.
+
+Verified live: the exact reported question now gets the correct answer at 80%
+confidence (`auto_reply`); no regression on 3 other known-correct queries re-checked
+after the threshold change.

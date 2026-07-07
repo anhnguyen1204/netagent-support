@@ -139,7 +139,7 @@ src/
 
 ### Knowledge Base
 
-The KB is built from **`data/curated_kb.csv`** — 39 hand-curated problem→solution pairs,
+The KB is built from **`data/curated_kb.csv`** — 40 hand-curated problem→solution pairs,
 each read directly from the raw chat and grounded in a real staff answer.
 
 Automated extraction (grouping messages into conversation threads, detecting resolution,
