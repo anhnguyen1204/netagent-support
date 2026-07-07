@@ -14,10 +14,16 @@ class GateThresholds(BaseModel):
     confidence >= auto_reply_min          -> auto_reply
     confidence >= suggest_to_staff_min    -> suggest_to_staff
     below suggest_to_staff_min            -> escalate
+
+    suggest_to_staff_min is calibrated against measured composite scores (raw retrieval
+    score x KB entry confidence) on 12 known-correct queries against the curated KB,
+    which ranged 0.62-0.76 (see RESULTS.md). 0.55 sits with real margin below that floor,
+    filtering weak/wrong-topic matches (a user-reported case scored 0.58 before this was
+    raised) without risking a genuinely correct answer being escalated instead of shown.
     """
 
     auto_reply_min: float = 0.75
-    suggest_to_staff_min: float = 0.45
+    suggest_to_staff_min: float = 0.55
 
 
 class Settings(BaseModel):

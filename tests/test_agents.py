@@ -126,10 +126,22 @@ def test_critic_auto_reply_on_strong_match():
 
 
 def test_critic_suggest_to_staff_on_medium_match():
-    # score 0.6 * 0.95 = 0.57 -> between 0.45 and 0.75
-    state = AgentState(question="q", retrieved=[make_scored("p", "s", "credential", 0.6, confidence=0.95)])
+    # score 0.65 * 0.95 = 0.6175 -> between suggest_to_staff_min (0.55) and auto_reply_min
+    # (0.75), with real margin on both sides (not sitting right at a boundary)
+    state = AgentState(question="q", retrieved=[make_scored("p", "s", "credential", 0.65, confidence=0.95)])
     out = critique(state, NullLLM(), GateThresholds())
     assert out.decision == "suggest_to_staff"
+
+
+def test_critic_escalate_below_suggest_floor():
+    # score 0.55 * 0.95 = 0.5225 -> below suggest_to_staff_min (0.55). This threshold was
+    # raised from 0.45 after a user-reported case: a wrong-topic KB match scored 0.58
+    # composite and was shown as an answer instead of escalating -- calibrated against
+    # measured composite scores on 12 known-correct queries (0.62-0.76, see RESULTS.md),
+    # so 0.55 sits with real margin below genuinely correct matches.
+    state = AgentState(question="q", retrieved=[make_scored("p", "s", "credential", 0.55, confidence=0.95)])
+    out = critique(state, NullLLM(), GateThresholds())
+    assert out.decision == "escalate"
 
 
 def test_critic_escalate_on_no_results():
