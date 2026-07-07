@@ -86,6 +86,21 @@ def test_answer_llm_synthesis_used_and_cites_source():
     assert "nguồn" in out.answer
 
 
+def test_answer_prompt_forbids_greeting_and_signoff():
+    # regression guard: every answer used to open with "Chào bạn," and close with a
+    # sign-off ("Chúc bạn...", "Nếu cần hỗ trợ thêm...") regardless of the question --
+    # the prompt must explicitly forbid this, not just ask for "friendly".
+    from tests.conftest import FakeLLM
+
+    llm = FakeLLM(reply="placeholder")
+    state = AgentState(question="q", retrieved=[make_scored("p", "s", "credential", 0.9)])
+    answer(state, llm)
+    assert len(llm.calls) == 1
+    prompt = llm.calls[0]
+    assert "NEVER open with" in prompt
+    assert "NEVER close with" in prompt
+
+
 def test_critic_auto_reply_on_strong_match():
     # score 0.9 * confidence 0.95 = 0.855 >= 0.75
     state = AgentState(question="q", retrieved=[make_scored("p", "s", "credential", 0.9, confidence=0.95)])

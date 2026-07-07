@@ -12,17 +12,25 @@ from src.llm.null_llm import NullLLM
 
 NO_ANSWER = "Xin lỗi, hiện chưa tìm thấy giải pháp phù hợp trong cơ sở tri thức cho câu hỏi này."
 
-POLISH_PROMPT = """You are a Vietnamese technical support assistant for the netAgent
-platform. Using ONLY the verified solution below, write a concise, friendly answer to the
-user's latest message in Vietnamese. Do not invent details beyond the solution. If earlier
-conversation is shown, keep your answer consistent with it (e.g. the user may be asking a
-follow-up).
+POLISH_PROMPT = """You are answering a Vietnamese technical support question for the
+netAgent platform, inside a chat UI where the answer is shown directly (there is no
+separate greeting/sign-off from a human agent around it).
+
+Using ONLY the verified solution below, write the answer in Vietnamese. Hard rules:
+- Start directly with the answer content. NEVER open with "Chào bạn", "Xin chào", or any
+  greeting.
+- NEVER close with a sign-off, well-wish, or offer of further help ("Chúc bạn...",
+  "Nếu cần hỗ trợ thêm...", "Trân trọng", etc).
+- Do not invent details beyond the solution.
+- Be concise: 1-4 sentences unless the solution has multiple distinct steps.
+If earlier conversation is shown, keep your answer consistent with it (e.g. the user may
+be asking a follow-up).
 {history_block}
 User's latest message: {question}
 Verified problem: {problem}
 Verified solution: {solution}
 
-Answer:"""
+Answer (content only, no greeting or sign-off):"""
 
 
 def _history_block(state: AgentState) -> str:
