@@ -228,3 +228,44 @@ the correct apples-to-apples check — a naïve local-time display can look a da
 needed) is recorded into the monitor. Verified via `TestClient`: scheduler starts, a
 posted question records its topic (`workflow_publish: 1`), scheduler shuts down cleanly
 on app shutdown.
+
+## Multi-turn conversation (`/ask` with `session_id`)
+
+Added `ConversationStore` (`src/agents/memory.py`) — per-session turn history — and made
+`retrieve`/`answer` history-aware so follow-ups work ("nguyên nhân của nó là gì?" resolves
+against the prior turn). Requires an LLM backend (history-aware query rewriting needs it);
+stateless without one.
+
+**Iteration to make it deterministic, not flaky**, tracked through real user testing:
+
+1. **First bug**: `_mention_edges`-style naive anchoring (folding raw history text into
+   the search query) inflated scores uniformly, dragging off-topic follow-ups
+   ("thời tiết hôm nay") above the LLM-trust threshold — the system answered questions it
+   should have escalated.
+2. **Fix**: separated RECALL (anchored search finds the right candidate) from CONFIDENCE
+   (candidates re-scored against the bare query, max of the LLM rewrite and the raw
+   question, so an off-topic follow-up's confidence reflects the bare match, not the
+   inflated anchored one). Off-topic follow-ups now reliably escalate.
+3. **Second bug** (found via live user testing, not initial test cases): a vague
+   follow-up late in a conversation ("cách xử lý lỗi này") picked the wrong
+   *similar*-but-different KB entry (`workflow_run` instead of `workflow_publish`)
+   ~25% of the time (2/8 in testing). Root cause: the anchor used only the
+   `ANCHOR_RECENT_TURNS` (2) most recent questions — in a 3+-turn conversation this
+   drops the *first* turn, which states the original problem and carries the strongest
+   topic signal; later turns ("nguyên nhân là gì") are themselves generic and anchor
+   weakly.
+4. **Fix**: `_anchor_text` always includes the first turn regardless of conversation
+   length, in addition to the most recent turns. Measured improvement: 6/8 → 8/10
+   correct on the repro case (75% → 80%). Wrong picks now correlate with a visibly
+   lower confidence score (~0.48) vs correct ones (~0.62-0.63) — a real, if imperfect,
+   confidence signal that a future pass could use to ask for clarification instead of
+   guessing (not implemented; diminishing returns on further tuning a 7B model's
+   inherent rewrite noise, documented here rather than chased further).
+
+**Default LLM model raised 3B → 7B** (`qwen2.5:7b`) partway through this work — its
+rewrites/grading are markedly more consistent, at the cost of ~2-4s/answer instead of
+~1-2s on CPU.
+
+**Known residual limitation**: vague, topic-ambiguous follow-ups late in a long
+conversation have a real (~20%) chance of retrieving a similar-but-wrong KB entry. Not
+observed for follow-ups that retain any specific wording from the original problem.

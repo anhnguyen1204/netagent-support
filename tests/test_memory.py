@@ -59,6 +59,24 @@ def test_retrieve_rewrites_followup_with_history_and_llm():
     assert out.search_query == "lỗi credential token hết hạn"
 
 
+def test_anchor_text_always_includes_first_turn():
+    # The first turn states the original problem and carries the strongest topic
+    # signal. In a long conversation, ANCHOR_RECENT_TURNS alone would drop it -- a
+    # regression that caused vague follow-ups ("cách xử lý lỗi này") to drift toward a
+    # different, similar-sounding KB entry once the original wording scrolled out of
+    # the recent-turns window.
+    from src.agents.retrieval import _anchor_text
+
+    history = [
+        Turn(question="workflow mất publish", answer="a1"),
+        Turn(question="nguyên nhân là gì", answer="a2"),
+        Turn(question="còn cách nào khác không", answer="a3"),
+        Turn(question="ok cảm ơn", answer="a4"),
+    ]
+    anchor = _anchor_text(history)
+    assert "workflow mất publish" in anchor  # first turn present despite being old
+
+
 def test_retrieve_no_history_uses_question_verbatim():
     store = FakeStore([make_scored("p", "s", "credential", 0.9)])
     llm = FakeLLM(reply="SHOULD-NOT-BE-USED")

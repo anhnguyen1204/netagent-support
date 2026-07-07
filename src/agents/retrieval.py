@@ -79,13 +79,36 @@ def _llm_grade(question: str, entry: ScoredKBEntry, llm: LLMClient) -> bool:
     return answer.startswith("y")
 
 
-# how many recent prior-turn questions to fold into the embedding search, to keep a
-# follow-up anchored to the conversation's topic.
+# how many of the MOST RECENT prior-turn questions to fold into the embedding search
+# (in addition to the first turn, see _anchor_text) to keep a follow-up anchored to the
+# conversation's topic.
 ANCHOR_RECENT_TURNS = 2
 
 
 def _entry_id(scored: ScoredKBEntry) -> tuple[str, str]:
     return (scored.entry.source_thread_id, scored.entry.problem)
+
+
+def _anchor_text(history: list) -> str:
+    """Build the context text used to anchor a follow-up's search.
+
+    Always includes the FIRST turn: it states the original problem and carries the
+    strongest, most specific signal (e.g. "workflow mất publish"). A later turn like
+    "nguyên nhân là gì" is itself generic and carries little topic signal on its own --
+    anchoring on only the last N turns can lose the original problem entirely once the
+    conversation is a few turns deep, letting a vague follow-up ("cách xử lý lỗi này")
+    drift toward a different-but-similar KB entry (e.g. workflow_run vs workflow_publish).
+    """
+    first = history[0].question
+    recent = [t.question for t in history[-ANCHOR_RECENT_TURNS:]]
+    # dedupe while preserving order (first may already be in `recent` for short convos)
+    seen: set[str] = set()
+    parts = []
+    for q in [first, *recent]:
+        if q not in seen:
+            seen.add(q)
+            parts.append(q)
+    return " ".join(parts)
 
 
 def retrieve(state: AgentState, store: KBStore, llm: LLMClient | None, top_k: int) -> AgentState:
@@ -116,7 +139,7 @@ def retrieve(state: AgentState, store: KBStore, llm: LLMClient | None, top_k: in
     #    off-topic follow-up ("thời tiết hôm nay") does NOT inherit the prior topic's
     #    inflated score. The anchor only decides *what* is a candidate, never *how
     #    confident* we are.
-    anchor = " ".join(t.question for t in state.history[-ANCHOR_RECENT_TURNS:])
+    anchor = _anchor_text(state.history)
     anchored_hits = store.search(f"{anchor} {query}", top_k=top_k)
 
     # Score candidates against BOTH the rewrite and the raw question, taking the max — so
