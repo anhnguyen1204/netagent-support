@@ -79,6 +79,15 @@ def _llm_grade(question: str, entry: ScoredKBEntry, llm: LLMClient) -> bool:
     return answer.startswith("y")
 
 
+# how many recent prior-turn questions to fold into the embedding search, to keep a
+# follow-up anchored to the conversation's topic.
+ANCHOR_RECENT_TURNS = 2
+
+
+def _entry_id(scored: ScoredKBEntry) -> tuple[str, str]:
+    return (scored.entry.source_thread_id, scored.entry.problem)
+
+
 def retrieve(state: AgentState, store: KBStore, llm: LLMClient | None, top_k: int) -> AgentState:
     has_llm = llm is not None and not isinstance(llm, NullLLM)
 
@@ -90,15 +99,50 @@ def retrieve(state: AgentState, store: KBStore, llm: LLMClient | None, top_k: in
         state.search_query = state.question
     query = state.search_query
 
-    results = store.search(query, top_k=top_k)
-    results = [r for r in results if r.score >= MIN_RETRIEVAL_SCORE]
+    if not state.history:
+        # first question: plain search, score is the confidence, fast trust-path grading.
+        results = [r for r in store.search(query, top_k=top_k) if r.score >= MIN_RETRIEVAL_SCORE]
+        if has_llm:
+            results = [
+                r for r in results if r.score >= LLM_GRADE_TRUST_SCORE or _llm_grade(query, r, llm)
+            ]
+        state.retrieved = results
+        return state
 
-    if has_llm:
-        # keep strong-similarity hits outright; only ask the LLM to adjudicate the
-        # weaker middle band, where a wrong-topic false positive is actually likely.
-        results = [
-            r for r in results if r.score >= LLM_GRADE_TRUST_SCORE or _llm_grade(query, r, llm)
-        ]
+    # Follow-up: separate RECALL from CONFIDENCE.
+    #  - Recall: an anchored search (prior questions + this one) reliably finds the
+    #    conversation's entry even when a small LLM's rewrite drifts.
+    #  - Confidence: score each candidate by how well it matches the BARE query, so an
+    #    off-topic follow-up ("thời tiết hôm nay") does NOT inherit the prior topic's
+    #    inflated score. The anchor only decides *what* is a candidate, never *how
+    #    confident* we are.
+    anchor = " ".join(t.question for t in state.history[-ANCHOR_RECENT_TURNS:])
+    anchored_hits = store.search(f"{anchor} {query}", top_k=top_k)
 
+    # Score candidates against BOTH the rewrite and the raw question, taking the max — so
+    # a single bad rewrite from a noisy LLM can't sink a follow-up the raw wording would
+    # have matched. Both are context-free of the anchor, so off-topic follow-ups still
+    # score low and get filtered.
+    bare_score: dict[tuple[str, str], float] = {}
+    for text in {query, state.question}:
+        for r in store.search(text, top_k=top_k):
+            key = _entry_id(r)
+            bare_score[key] = max(bare_score.get(key, 0.0), r.score)
+
+    results = []
+    for hit in anchored_hits:
+        hit.score = bare_score.get(_entry_id(hit), 0.0)
+        if hit.score >= MIN_RETRIEVAL_SCORE:
+            results.append(hit)
+    results.sort(key=lambda r: r.score, reverse=True)
+
+    # Follow-ups intentionally do NOT go through the LLM relevance grader. A genuine
+    # follow-up phrased in isolation ("tôi nên sửa như thế nào") legitimately scores in
+    # the borderline band against a specific KB entry, and a small local model is too
+    # unreliable a yes/no judge to gate on. The honest re-score against the bare query
+    # already excludes off-topic follow-ups (they fall below MIN_RETRIEVAL_SCORE because
+    # the bare query never surfaces the prior topic's entry), so clearing that floor is
+    # sufficient to keep the result. This makes multi-turn deterministic instead of
+    # flaky at the LLM grader's mercy.
     state.retrieved = results
     return state

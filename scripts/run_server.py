@@ -6,7 +6,7 @@ the environment by `load_settings()` inside `src.server` at app startup — see
 
 Examples:
     python scripts/run_server.py                       # LLM_BACKEND defaults to null
-    LLM_BACKEND=ollama OLLAMA_MODEL=qwen2.5:3b python scripts/run_server.py
+    LLM_BACKEND=ollama OLLAMA_MODEL=qwen2.5:7b python scripts/run_server.py
 """
 from __future__ import annotations
 

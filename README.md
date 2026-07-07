@@ -53,16 +53,17 @@ entry) and **answer synthesis** (the solution is rephrased conversationally).
 ```bash
 # 1. install Ollama (https://ollama.com) and pull a small multilingual model
 ollama serve &                 # start the Ollama server (keep it running)
-ollama pull qwen2.5:3b
+ollama pull qwen2.5:7b
 
 # 2. run the app pointed at Ollama
-LLM_BACKEND=ollama OLLAMA_MODEL=qwen2.5:3b PYTHONPATH=. python scripts/run_server.py
+LLM_BACKEND=ollama OLLAMA_MODEL=qwen2.5:7b PYTHONPATH=. python scripts/run_server.py
 ```
 
-On CPU with a 3B model each `/ask` takes ~1–2s. Strong-similarity KB matches are trusted
-on the embedding score alone (not vetoed by the LLM), so a small model's occasional
-misjudgment can't discard a clearly-relevant answer — see `src/agents/retrieval.py`
-(`LLM_GRADE_TRUST_SCORE`).
+On CPU each `/ask` takes ~2–4s with the default `qwen2.5:7b` (a smaller 3B model is
+faster, ~1–2s, but its query rewrites and relevance judgments are noticeably noisier for
+multi-turn). Strong-similarity KB matches are trusted on the embedding score alone (not
+vetoed by the LLM), so a small model's occasional misjudgment can't discard a clearly-
+relevant answer — see `src/agents/retrieval.py` (`LLM_GRADE_TRUST_SCORE`).
 
 ### Ask a question
 
@@ -106,7 +107,7 @@ should confirm), or `escalate` (no confident match — an alert is fired).
 ## Running the tests
 
 ```bash
-pytest                  # all 47 tests (~10s; the slow ones load the embedding model)
+pytest                  # all 59 tests (~12s; the slow ones load the embedding model)
 pytest -m "not slow"    # fast tier only (~2.5s, no embeddings/network)
 ```
 

@@ -46,7 +46,7 @@ def load_settings() -> Settings:
     return Settings(
         llm_backend=os.getenv("LLM_BACKEND", "null"),
         ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
-        ollama_model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
+        ollama_model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
         netmind_api_url=os.getenv("NETMIND_API_URL", ""),
         netmind_api_key=os.getenv("NETMIND_API_KEY", ""),
         qdrant_host=os.getenv("QDRANT_HOST", "localhost"),

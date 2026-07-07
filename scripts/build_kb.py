@@ -34,7 +34,7 @@ def _build_llm(backend: str) -> LLMClient:
     if backend == "ollama":
         return OllamaLLM(
             host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
-            model=os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
+            model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
         )
     return NullLLM()
 
