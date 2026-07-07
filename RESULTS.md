@@ -269,3 +269,20 @@ rewrites/grading are markedly more consistent, at the cost of ~2-4s/answer inste
 **Known residual limitation**: vague, topic-ambiguous follow-ups late in a long
 conversation have a real (~20%) chance of retrieving a similar-but-wrong KB entry. Not
 observed for follow-ups that retain any specific wording from the original problem.
+
+## Answer style (LLM boilerplate)
+
+User-reported: every LLM-synthesized answer opened with "Chào bạn," and closed with
+generic Vietnamese customer-service filler ("Chúc bạn một ngày tốt lành!", "Nếu cần hỗ
+trợ thêm...") regardless of the question. `POLISH_PROMPT` had asked for "concise,
+friendly" but never forbade greetings/sign-offs, so the 7B model defaulted to
+boilerplate it was evidently trained on. Fixed by making the prompt explicitly forbid
+opening with a greeting or closing with a sign-off, and capping length to 1-4 sentences
+unless the solution has multiple steps. Verified live against Ollama across several
+questions — direct content only, no wrapper text.
+
+While testing this, observed one instance (1/19 sampled calls) of Chinese-character
+leakage mid-answer from `qwen2.5:7b` — not reproduced in a larger follow-up sample
+(0/12), likely a rare sampling artifact rather than something the prompt reliably
+triggers. Not defended against in code; noted here as a residual risk to watch for if
+it recurs at a higher rate.
