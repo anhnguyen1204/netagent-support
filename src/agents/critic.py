@@ -1,6 +1,6 @@
 """B4: confidence scoring + gate.
 
-Confidence = top retrieval score (NullLLM) or LLM-graded (if available). Applies gate
+Confidence = top retrieval score x the matched entry's stored confidence. Applies gate
 thresholds from src.config.GateThresholds to pick the decision:
     auto_reply | suggest_to_staff | escalate
 """

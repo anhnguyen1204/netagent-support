@@ -46,13 +46,14 @@ def test_store_none_session_id_is_noop():
     assert store.history(None) == []
 
 
-def test_retrieve_rewrites_followup_with_history_and_llm():
-    # FakeLLM returns a fixed rewritten query; retrieval should search with it and record
-    # it on state.search_query.
+def test_retrieve_uses_search_query_set_by_orchestrate():
+    # orchestrate.py (not retrieval.py) is responsible for rewriting a follow-up into a
+    # self-contained query; retrieve() just consumes state.search_query as-is.
     store = FakeStore([make_scored("p", "s", "credential", 0.9)])
-    llm = FakeLLM(reply="lỗi credential token hết hạn")
+    llm = FakeLLM(reply="yes")
     state = AgentState(
         question="còn cái đó thì sao?",
+        search_query="lỗi credential token hết hạn",
         history=[Turn(question="workflow lỗi", answer="kiểm tra credential")],
     )
     out = retrieve(state, store, llm, top_k=3)
@@ -77,12 +78,12 @@ def test_anchor_text_always_includes_first_turn():
     assert "workflow mất publish" in anchor  # first turn present despite being old
 
 
-def test_retrieve_no_history_uses_question_verbatim():
+def test_retrieve_falls_back_to_question_when_search_query_unset():
     store = FakeStore([make_scored("p", "s", "credential", 0.9)])
-    llm = FakeLLM(reply="SHOULD-NOT-BE-USED")
+    llm = FakeLLM(reply="yes")
     state = AgentState(question="lỗi credential", history=[])
     out = retrieve(state, store, llm, top_k=3)
-    assert out.search_query == "lỗi credential"  # no rewrite without history
+    assert out.search_query == "lỗi credential"
 
 
 def test_answer_includes_history_in_llm_prompt():

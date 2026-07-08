@@ -42,10 +42,9 @@ class RecordingAlerter(Alerter):
 
 
 class FakeLLM:
-    """A stand-in LLMClient that returns a fixed reply, so LLM-path logic (relevance
-    grading, answer synthesis) can be tested without a real model. It is deliberately
-    NOT a NullLLM subclass so the `isinstance(llm, NullLLM)` guard treats it as a real
-    backend and exercises the LLM code path.
+    """A stand-in LLMClient that returns a fixed reply, so LLM-path logic (turn
+    classification, relevance grading, answer synthesis) can be tested without a real
+    model.
     """
 
     def __init__(self, reply: str = "yes"):

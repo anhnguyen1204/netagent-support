@@ -19,10 +19,11 @@ It does three things:
   built from the static CSV dataset and live user-submitted text only.
 - **No fine-tuning.** Data is too small (~1,500 rows, mostly noise). Use LLM few-shot /
   embeddings, never train a classifier from scratch.
-- **CPU only, possibly no LLM access at all.** The retrieval path (embeddings + vector
-  search) must work with **zero LLM calls** as a fallback. LLM calls (if available) only
-  improve phrasing/synthesis — they are never a hard dependency for the system to return
-  an answer.
+- **LLM access is a hard requirement, not an optional enhancement.** Every
+  classify/route/retrieve-grade/answer step goes through `llm.base.LLMClient` (Ollama,
+  local, by default). There is no rule-based or template fallback path anywhere in the
+  system — if the LLM backend is unreachable, the system fails loudly at startup rather
+  than silently degrading to a weaker heuristic.
 - **Read-only philosophy carries through even though there's no live server to read:**
   the system never claims to take an action. It answers and it alerts. Nothing else.
 
@@ -34,7 +35,7 @@ real company integrations later without touching the core logic:
 | Seam | Interface | Stub today | Real version later |
 |------|-----------|------------|---------------------|
 | `Intake` | `intake.base.MessageSource` | REST endpoint / replay-from-CSV | netChat (Mattermost) webhook |
-| `LLM` | `llm.base.LLMClient` | local Ollama model, or `NullLLM` (template-only) | netMind gateway |
+| `LLM` | `llm.base.LLMClient` | local Ollama model (required) | netMind gateway |
 | `Alerter` | `alerts.base.Alerter` | SMTP email / console log | netChat DM to KTV |
 
 Every one of these is a small interface with one or two methods. Do not let any other
@@ -61,11 +62,11 @@ netagent-support/
 │   │                               #  is curated, not thread-extracted; see RESULTS.md)
 │   ├── agents/                     # REGIME B — online agent graph (LangGraph)
 │   │   ├── state.py                # shared graph state schema
-│   │   ├── orchestrator.py         # B0: parse + route
+│   │   ├── orchestrator.py         # B0: LLM turn-type classification + query rewrite
 │   │   ├── retrieval.py            # B1: KB search + CRAG-style relevance grading
-│   │   ├── answerer.py             # B3: compose grounded answer
+│   │   ├── answerer.py             # B3: compose grounded answer, or direct_reply for chit_chat/off_topic
 │   │   ├── critic.py               # B4: confidence scoring + gate
-│   │   └── graph.py                # wires the above into a LangGraph graph
+│   │   └── graph.py                # wires the above into a LangGraph graph, routes on turn_type
 │   ├── monitor/
 │   │   └── spike.py                # topic-frequency spike detector + alert trigger
 │   ├── intake/
@@ -74,8 +75,7 @@ netagent-support/
 │   │   └── replay_intake.py        # replays historical CSV through the system, time-ordered
 │   ├── llm/
 │   │   ├── base.py                 # LLMClient interface
-│   │   ├── null_llm.py             # template-only fallback, zero LLM calls
-│   │   ├── ollama_llm.py           # local model implementation
+│   │   ├── ollama_llm.py           # local model implementation (required backend today)
 │   │   └── netmind_llm.py          # stub for company gateway (fill in if access granted)
 │   ├── alerts/
 │   │   ├── base.py                 # Alerter interface

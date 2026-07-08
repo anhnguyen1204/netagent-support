@@ -11,9 +11,9 @@ the netAgent/netFlow platform). It does three things:
 3. **Monitors for spikes** — counts issue topics over time; if many users hit the same
    problem in a short window, it fires an alert.
 
-Everything runs **CPU-only** and **without an LLM** — the retrieval path uses embeddings
-+ vector search with zero LLM calls. An LLM (Ollama) only improves answer phrasing if
-available; it is never required.
+Runs **CPU-only**, no GPU or fine-tuning required. LLM access (a local Ollama model) is
+a hard requirement — every turn-type classification, retrieval-relevance grading, and
+answer step goes through it; there is no rule-based/template fallback.
 
 ---
 
@@ -42,22 +42,25 @@ PYTHONPATH=. python scripts/replay_demo.py
 > package resolves. `docker compose up -d` is optional — without it, the KB lives in an
 > in-memory Qdrant that is rebuilt on each server start (fine for a demo).
 
-### Enabling LLM reasoning (optional)
+### LLM setup (required)
 
-By default (`LLM_BACKEND=null`) answers are the KB solution shown via a template, and
-the escalate/answer decision is purely the embedding similarity score. Enabling a local
-LLM adds two things: **relevance grading** (the LLM rejects off-topic KB hits, so a
-question like "explain netAgent" correctly escalates instead of returning an unrelated
-entry) and **answer synthesis** (the solution is rephrased conversationally).
+The server needs a running Ollama instance — it fails fast at startup rather than
+degrading to a weaker heuristic if one isn't reachable.
 
 ```bash
 # 1. install Ollama (https://ollama.com) and pull a small multilingual model
 ollama serve &                 # start the Ollama server (keep it running)
 ollama pull qwen2.5:7b
 
-# 2. run the app pointed at Ollama
-LLM_BACKEND=ollama OLLAMA_MODEL=qwen2.5:7b PYTHONPATH=. python scripts/run_server.py
+# 2. run the app (LLM_BACKEND defaults to ollama)
+PYTHONPATH=. python scripts/run_server.py
 ```
+
+The LLM does three things: **turn-type classification** (routes each message as
+new_problem / follow_up / chit_chat / off_topic before deciding whether to search the
+KB at all — see [Architecture](#architecture)), **relevance grading** (rejects off-topic
+KB hits in the ambiguous score band), and **answer synthesis** (the solution is
+rephrased conversationally, or a natural direct reply for chit_chat/off_topic turns).
 
 On CPU each `/ask` takes ~2–4s with the default `qwen2.5:7b` (a smaller 3B model is
 faster, ~1–2s, but its query rewrites and relevance judgments are noticeably noisier for
@@ -100,16 +103,34 @@ Response:
 ```
 
 `decision` is one of `auto_reply` (high confidence), `suggest_to_staff` (medium — a human
-should confirm), or `escalate` (no confident match — an alert is fired).
+should confirm), `escalate` (no confident match — an alert is fired), or `direct_reply`
+(the message was chit_chat/off_topic — no KB search, no escalation, just a short
+natural reply).
 
 ---
 
 ## Running the tests
 
 ```bash
-pytest                  # all 59 tests (~12s; the slow ones load the embedding model)
+pytest                  # all 78 tests (~25s; the slow ones load the embedding model + call Ollama)
 pytest -m "not slow"    # fast tier only (~2.5s, no embeddings/network)
 ```
+
+---
+
+## Evaluating answer quality
+
+```bash
+LLM_BACKEND=ollama OLLAMA_MODEL=qwen2.5:7b PYTHONPATH=. python eval/run_eval.py
+```
+
+Scores the live agent graph against `data/qa_golden.csv` (a private, gitignored set of
+questions with expected KB matches / decisions — not included in this repo, same reason
+as `data/golden_set.csv`) and the classifier against `data/golden_set.csv`. Reports
+retrieval hit@1/hit@3, decision accuracy, **escalation precision/recall** (the key metric
+for the "confident wrong answer" risk — see [`RESULTS.md`](RESULTS.md)), and topic
+accuracy. Every `/ask` call is also logged to `data/processed/query_log.jsonl`
+(gitignored) for replay/analysis.
 
 ---
 
@@ -120,18 +141,21 @@ Two regimes:
 - **Regime A (offline, `scripts/build_kb.py`)**: `clean` → `classify` → load the curated
   Knowledge Base into Qdrant. Run once (or when the KB changes).
 - **Regime B (online, `scripts/run_server.py`)**: a FastAPI `/ask` endpoint driving a
-  LangGraph agent: `orchestrate → retrieve → answer → critic`, which gates the answer
-  into auto-reply / suggest-to-staff / escalate. A background spike monitor
-  (APScheduler) watches question topics live.
+  LangGraph agent. `orchestrate` first classifies the turn type (LLM call): chit_chat/
+  off_topic route straight to `direct_reply` (no KB, no escalation); new_problem/
+  follow_up continue through `retrieve → answer → critic`, which gates the answer into
+  auto-reply / suggest-to-staff / escalate. A background spike monitor (APScheduler)
+  watches question topics live.
 
 ```
 src/
 ├── pipeline/     clean.py, classify.py, synthesize_kb.py   (Regime A)
-├── agents/       orchestrator, retrieval, answerer, critic, graph, state   (Regime B)
+├── agents/       orchestrator (turn-type classify), retrieval, answerer
+│                 (+ direct_reply), critic, graph, state   (Regime B)
 ├── kb/           schema.py (KBEntry), store.py (Qdrant + embeddings)
 ├── monitor/      spike.py (topic-frequency spike detector)
 ├── intake/       base.py + api_intake / replay_intake + static/index.html
-├── llm/          base.py + null_llm / ollama_llm / netmind_llm
+├── llm/          base.py + ollama_llm / netmind_llm
 ├── alerts/       base.py + console_alerter / email_alerter
 ├── config.py     gate thresholds + settings (one place)
 └── server.py     FastAPI app
@@ -157,7 +181,7 @@ Copy `.env.example` and adjust as needed. Key variables:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `LLM_BACKEND` | `null` | `null` (no LLM, template answers) / `ollama` / `netmind` |
+| `LLM_BACKEND` | `ollama` | `ollama` (required backend today) / `netmind` (stub) |
 | `EMBEDDING_MODEL` | `BAAI/bge-m3` | embedding model; falls back to `paraphrase-multilingual-mpnet-base-v2` if it can't load |
 | `QDRANT_HOST` / `QDRANT_PORT` | `localhost` / `6333` | vector DB (in-memory fallback if unreachable) |
 | `ALERTER_BACKEND` | `console` | `console` / `email` |

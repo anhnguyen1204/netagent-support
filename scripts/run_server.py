@@ -5,7 +5,7 @@ the environment by `load_settings()` inside `src.server` at app startup — see
 `.env.example`. This launcher only needs the host/port to bind uvicorn.
 
 Examples:
-    python scripts/run_server.py                       # LLM_BACKEND defaults to null
+    python scripts/run_server.py                       # LLM_BACKEND defaults to ollama
     LLM_BACKEND=ollama OLLAMA_MODEL=qwen2.5:7b python scripts/run_server.py
 """
 from __future__ import annotations

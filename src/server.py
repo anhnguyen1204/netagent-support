@@ -23,10 +23,10 @@ from src.alerts.console_alerter import ConsoleAlerter
 from src.alerts.email_alerter import EmailAlerter
 from src.config import load_settings
 from src.kb.store import KBStore
-from src.llm.null_llm import NullLLM
 from src.llm.ollama_llm import OllamaLLM
+from src.monitor.query_log import QueryLogger
 from src.monitor.spike import SpikeMonitor, run_spike_check
-from src.pipeline.classify import _rule_based_classify
+from src.pipeline.classify import _llm_few_shot_classify
 from src.pipeline.synthesize_kb import load_curated_kb
 
 logger = logging.getLogger("netagent.server")
@@ -34,12 +34,16 @@ logger = logging.getLogger("netagent.server")
 CURATED_KB_CSV = Path("data/curated_kb.csv")
 STATIC_DIR = Path(__file__).resolve().parent / "intake" / "static"
 SPIKE_CHECK_INTERVAL_SECONDS = 3600  # hourly tick for the live spike check
+QUERY_LOG_PATH = Path("data/processed/query_log.jsonl")  # gitignored (data/processed/)
 
 
 def _build_llm(settings):
     if settings.llm_backend == "ollama":
         return OllamaLLM(host=settings.ollama_host, model=settings.ollama_model)
-    return NullLLM()
+    raise RuntimeError(
+        f"Unknown or unconfigured LLM_BACKEND={settings.llm_backend!r} -- LLM access is "
+        "a hard requirement now. Set LLM_BACKEND=ollama (and have `ollama serve` running)."
+    )
 
 
 def _build_alerter(settings):
@@ -90,6 +94,7 @@ async def lifespan(app: FastAPI):
     llm = _build_llm(settings)
     alerter = _build_alerter(settings)
     app.state.graph = build_graph(store, llm, alerter, thresholds=settings.gate)
+    app.state.llm = llm
     app.state.llm_backend = settings.llm_backend
 
     # Spike monitor: each /ask question's topic is recorded live; an APScheduler job
@@ -107,6 +112,7 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     app.state.scheduler = scheduler
     app.state.conversations = ConversationStore()
+    app.state.query_logger = QueryLogger(QUERY_LOG_PATH)
     logger.info("agent graph + spike monitor ready (LLM_BACKEND=%s)", settings.llm_backend)
 
     yield
@@ -149,18 +155,28 @@ def health() -> HealthResponse:
 
 @app.post("/ask", response_model=AskResponse)
 def ask(request: AskRequest) -> AskResponse:
-    # record the question's topic for live spike monitoring (rule-based, no LLM needed)
-    _, _, topic, _ = _rule_based_classify(request.question)
-    app.state.spike_monitor.record(topic, time.time() * 1000)
-
     # load prior turns for this session (empty if no session_id or first message)
     history = app.state.conversations.history(request.session_id)
 
+    start = time.monotonic()
     state = run_graph(app.state.graph, request.question, history=history)
+    latency_ms = (time.monotonic() - start) * 1000
     source = state.retrieved[0].entry.source_thread_id if state.retrieved else None
+
+    # record topic for live spike monitoring -- only for genuine technical turns
+    # (chit_chat/off_topic never touched the KB and shouldn't feed the spike monitor).
+    # Prefer the matched KB entry's topic (free, already computed); only spend an LLM
+    # call classifying the raw question when nothing was retrieved.
+    if state.turn_type in ("new_problem", "follow_up"):
+        if state.retrieved:
+            topic = state.retrieved[0].entry.topic
+        else:
+            _, _, topic, _ = _llm_few_shot_classify(request.question, app.state.llm)
+        app.state.spike_monitor.record(topic, time.time() * 1000)
 
     # remember this turn so the next message in the session has context
     app.state.conversations.append(request.session_id, request.question, state.answer or "")
+    app.state.query_logger.log(state, request.session_id, latency_ms, app.state.llm_backend)
 
     return AskResponse(
         answer=state.answer or "",

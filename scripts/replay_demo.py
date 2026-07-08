@@ -5,16 +5,21 @@ spike monitor, calling the Alerter on each detected spike, and prints a timeline
 alerts. This is the historical validation of the monitor: it should surface the real
 incident-wave days already present in the data (e.g. the workflow "mất publish" cluster,
 the vmail/infra incident days that coincide with 📢 broadcasts).
+
+Classification now requires a live LLM backend (Ollama) -- the first run over all
+~1300 messages makes one LLM call per uncached message; subsequent runs hit
+data/processed/classify_cache.json (keyed by content hash) and are fast.
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
 
 from src.alerts.console_alerter import ConsoleAlerter
-from src.llm.null_llm import NullLLM
+from src.llm.ollama_llm import OllamaLLM
 from src.monitor.spike import SpikeMonitor, run_spike_check
 from src.pipeline.classify import classify
 
@@ -29,8 +34,12 @@ def _fmt(ms: float) -> str:
 def main() -> None:
     print("=== Replay demo: historical spike detection ===\n")
 
+    llm = OllamaLLM(
+        host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
+        model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
+    )
     df = pd.read_parquet(CLEAN_PARQUET)
-    df = classify(df, NullLLM(), CLASSIFY_CACHE).sort_values("created_at")
+    df = classify(df, llm, CLASSIFY_CACHE).sort_values("created_at")
     print(f"replaying {len(df)} messages in timestamp order\n")
 
     monitor = SpikeMonitor(bucket_minutes=24 * 60, k=2.0, cold_start_abs_threshold=4)

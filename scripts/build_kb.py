@@ -18,7 +18,6 @@ from qdrant_client import QdrantClient
 
 from src.kb.store import KBStore
 from src.llm.base import LLMClient
-from src.llm.null_llm import NullLLM
 from src.llm.ollama_llm import OllamaLLM
 from src.pipeline.classify import classify
 from src.pipeline.clean import clean
@@ -36,7 +35,10 @@ def _build_llm(backend: str) -> LLMClient:
             host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
             model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
         )
-    return NullLLM()
+    raise RuntimeError(
+        f"Unknown or unconfigured LLM_BACKEND={backend!r} -- LLM access is a hard "
+        "requirement now. Set LLM_BACKEND=ollama (and have `ollama serve` running)."
+    )
 
 
 def _build_kb_store() -> KBStore:
@@ -63,7 +65,7 @@ def main() -> None:
     clean_df = clean(RAW_CSV, CLEAN_PARQUET)
 
     print("\n=== Step 2: classify ===")
-    backend = os.getenv("LLM_BACKEND", "null")
+    backend = os.getenv("LLM_BACKEND", "ollama")
     llm = _build_llm(backend)
     classified_df = classify(clean_df, llm, CLASSIFY_CACHE)
     print(f"classified {len(classified_df)} rows (LLM_BACKEND={backend})")

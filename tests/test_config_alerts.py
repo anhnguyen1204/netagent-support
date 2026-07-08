@@ -9,14 +9,13 @@ from src.alerts.base import AlertRecord
 from src.alerts.console_alerter import ConsoleAlerter
 from src.alerts.email_alerter import EmailAlerter
 from src.config import GateThresholds, load_settings
-from src.llm.null_llm import NullLLM
 
 
 def test_load_settings_defaults(monkeypatch):
     for var in ["LLM_BACKEND", "QDRANT_PORT", "ALERTER_BACKEND"]:
         monkeypatch.delenv(var, raising=False)
     s = load_settings()
-    assert s.llm_backend == "null"
+    assert s.llm_backend == "ollama"
     assert s.qdrant_port == 6333
     assert s.alerter_backend == "console"
     assert isinstance(s.gate, GateThresholds)
@@ -33,12 +32,6 @@ def test_load_settings_reads_env(monkeypatch):
 def test_gate_thresholds_ordering():
     g = GateThresholds()
     assert g.auto_reply_min > g.suggest_to_staff_min
-
-
-def test_null_llm_complete_raises():
-    # NullLLM must not silently no-op -- callers rely on the error to use their fallback
-    with pytest.raises(RuntimeError):
-        NullLLM().complete("anything")
 
 
 def test_console_alerter_prints(capsys):

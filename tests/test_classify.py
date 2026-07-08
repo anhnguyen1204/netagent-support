@@ -1,17 +1,17 @@
-"""Unit tests for src/pipeline/classify.py — system detection + rule-based labels."""
+"""Unit tests for src/pipeline/classify.py — system detection + LLM classification."""
 from __future__ import annotations
 
 import pandas as pd
+
+from tests.conftest import FakeLLM
 
 from src.pipeline.classify import (
     INTENTS,
     SENDER_TYPES,
     TOPICS,
-    _rule_based_classify,
     classify,
     is_system_noise,
 )
-from src.llm.null_llm import NullLLM
 
 
 def test_is_system_noise_join_leave():
@@ -29,53 +29,62 @@ def test_is_system_noise_false_for_real_message():
     assert not is_system_noise("workflow của em bị mất publish")
 
 
-def test_rule_based_system_message():
-    sender, intent, topic, conf = _rule_based_classify("dunglt36 tham gia nhóm.")
-    assert sender == "system"
-    assert intent == "none"
-    assert topic == "none"
-
-
-def test_rule_based_returns_valid_taxonomy_values():
-    # every output must be a value from the taxonomy so eval/threading stay consistent
-    for msg in [
-        "workflow bị lỗi credential",
-        "cho em hỏi có node vẽ chart không ạ",
-        "Do hạ tầng bên e lỗi, bên e đang fix r a nhé",
-        "@thangnt30",
-    ]:
-        sender, intent, topic, conf = _rule_based_classify(msg)
-        assert sender in SENDER_TYPES
-        assert intent in INTENTS
-        assert topic in TOPICS
-        assert 0.0 <= conf <= 1.0
-
-
-def test_rule_based_credential_topic():
-    _, _, topic, _ = _rule_based_classify("anh vừa chạy bị lỗi credential")
-    assert topic == "credential"
+def test_classify_system_message_short_circuits_without_llm_call(tmp_path):
+    # system-noise messages never need an LLM call -- deterministic label instead.
+    df = pd.DataFrame({"content": ["dunglt36 tham gia nhóm."], "user_id": ["u1"], "created_at": [1.0]})
+    cache = tmp_path / "cache.json"
+    llm = FakeLLM(reply="should never be called")
+    out = classify(df, llm, cache)
+    assert list(out["sender_type"]) == ["system"]
+    assert list(out["intent"]) == ["none"]
+    assert list(out["topic"]) == ["none"]
+    assert llm.calls == []
 
 
 def test_classify_dataframe_adds_columns(tmp_path):
     df = pd.DataFrame(
         {
-            "content": ["dunglt36 tham gia nhóm.", "workflow bị lỗi credential nhờ giúp"],
-            "user_id": ["u1", "u2"],
-            "created_at": [1000.0, 2000.0],
+            "content": ["workflow bị lỗi credential nhờ giúp"],
+            "user_id": ["u2"],
+            "created_at": [2000.0],
         }
     )
     cache = tmp_path / "cache.json"
-    out = classify(df, NullLLM(), cache)
-    assert list(out["sender_type"]) == ["system", "customer"]
+    llm = FakeLLM(
+        reply='{"sender_type": "customer", "intent": "report_problem", "topic": "credential", "confidence": 0.8}'
+    )
+    out = classify(df, llm, cache)
+    assert list(out["sender_type"]) == ["customer"]
+    assert list(out["topic"]) == ["credential"]
     assert {"sender_type", "intent", "topic", "confidence"} <= set(out.columns)
     assert cache.exists()  # cache written
+
+
+def test_classify_result_values_are_valid_taxonomy(tmp_path):
+    df = pd.DataFrame({"content": ["cho em hỏi có node vẽ chart không ạ"], "user_id": ["u1"], "created_at": [1.0]})
+    cache = tmp_path / "cache.json"
+    llm = FakeLLM(
+        reply='{"sender_type": "customer", "intent": "ask_question", "topic": "node_feature", "confidence": 0.7}'
+    )
+    out = classify(df, llm, cache)
+    row = out.iloc[0]
+    assert row["sender_type"] in SENDER_TYPES
+    assert row["intent"] in INTENTS
+    assert row["topic"] in TOPICS
+    assert 0.0 <= row["confidence"] <= 1.0
 
 
 def test_classify_uses_cache(tmp_path):
     df = pd.DataFrame({"content": ["workflow bị lỗi"], "user_id": ["u1"], "created_at": [1.0]})
     cache = tmp_path / "cache.json"
-    classify(df, NullLLM(), cache)
+    llm = FakeLLM(
+        reply='{"sender_type": "customer", "intent": "report_problem", "topic": "workflow_run", "confidence": 0.6}'
+    )
+    classify(df, llm, cache)
     mtime = cache.stat().st_mtime_ns
-    # second run should hit cache and not rewrite the file
-    classify(df, NullLLM(), cache)
+    calls_after_first = len(llm.calls)
+
+    # second run should hit cache: no new LLM call, cache file untouched
+    classify(df, llm, cache)
     assert cache.stat().st_mtime_ns == mtime
+    assert len(llm.calls) == calls_after_first

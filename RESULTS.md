@@ -215,14 +215,57 @@ whatever the baseline). This dropped it to **9 clean, meaningful alerts**.
 replay all 1325 messages in timestamp order through classify + the spike monitor,
 running a check each time the day-bucket advances (mirroring the live scheduler tick).
 
-**Definition of Done met.** The 9 alerts are the real incident waves in the data — the
-"mất publish" cluster (`workflow_publish` spikes of 5/3/3 on 2026-04-10/13/14 UTC
-buckets), plus `node_feature` and `connection_access` waves. Crucially, the
-**`node_feature` spike on 2026-04-09 (5 reports) coincides with a real 📢/🚨 incident
-broadcast on the same day** — i.e. the detector fires on an incident day that also
-produced a broadcast, which is exactly the historical validation asked for. (Note:
-buckets are UTC-epoch floored; comparing spike days and broadcast days both in UTC is
-the correct apples-to-apples check — a naïve local-time display can look a day off.)
+**Definition of Done met on the statistics, not on what "spike" implies.** The 9 alerts
+are statistically genuine bursts relative to each topic's own baseline — the detection
+math is correct and unit-tested. But two rounds of manually reading the actual raw
+messages behind every one of the 9 alerts (not just the counts) found the underlying
+signal is considerably noisier than "many people hit the same problem":
+
+An earlier version of this section claimed the `node_feature` spike on 2026-04-09
+"coincides with a real 📢/🚨 incident broadcast on the same day" as external validation —
+**this is wrong**: the 04-09 broadcast is a netAgent *training-session* announcement (a
+pilot for 350 trainees), not an incident report — and on closer inspection it isn't even
+a coincidental same-day match, **the broadcast message itself is one of the 5 messages
+counted toward that spike**, directly inflating its count. Restricting the comparison to
+the 4 broadcasts that are genuine incident/outage/maintenance reports (📢 sự cố 04-17, 📢
+[DONE] 04-17, 📢 [DONE] 04-24, 🚨 Vmail-instability update 05-25): **0 of the 9 detected
+spikes land on a genuine incident-broadcast day**, and the real Vmail-instability
+incident on 2026-05-25 produced no detected spike at all — a miss, not a catch, in the
+other direction.
+
+**Per-spike audit (raw messages + distinct-user counts read directly, all 9 buckets):**
+
+| Day (UTC) | Topic | Msgs | Distinct users | What it actually is |
+|---|---|---|---|---|
+| 04-07 | node_feature | 3 | 3 | 3 *unrelated* problems (KPI time bug, Postman timeout, netchat DM error) — `node_feature`'s regex is too broad, lumps different issues into one bucket |
+| 04-09 | node_feature | 5 | 4 | Includes the training broadcast as one of the 5 counted messages; ~2 genuine problem reports |
+| 04-10 | workflow_publish | 3 | 2 | 1 repeat customer (2 msgs) + 1 staff msg referencing other threads |
+| 04-13 | workflow_publish | 5 | 3 | **Genuinely clean**: repeat customer + one new independent customer + staff reply |
+| 04-14 | workflow_publish | 3 | 2 | Same repeat customer confirming an ongoing issue to staff |
+| 04-22 | email | 3 | 3 | 1 real problem (staff+customer pair) + 1 unrelated different question |
+| 04-23 | connection_access | 4 | 3 | 2 genuine distinct complaints + 1 user posting twice (one an internal audit broadcast) |
+| 04-28 | node_feature | 4 | 4 | Looks like one conversation thread (1 request, 3 different staff replying) — not 4 independent complaints |
+| 06-12 | node_feature | 4 | 2 | 1 staff member walking 1 customer through a fix over 3 messages + 1 unrelated code request |
+
+**Only 1 of 9 (04-13) is genuinely clean**: multiple independent users reporting the same
+specific problem in one window. The other 8 fail for three distinct, identifiable
+reasons, not one: (1) message-count conflates one person's repeat follow-ups with
+independent reporters (04-10, 04-14, 06-12); (2) topic buckets are too coarse and lump
+unrelated problems together (04-07); (3) non-problem messages — staff broadcasts,
+feature explanations, multi-staff reply threads — get counted the same as genuine
+complaints (04-09, 04-28, parts of 04-22/04-23).
+
+**Honest status**: the detector correctly finds elevated message volume in a topic
+bucket relative to its own baseline — that part is real and verified. But "elevated
+message volume in a broad topic bucket" is a considerably noisier proxy for "an incident
+many people are hitting" than the name "spike alert" implies, and this dataset currently
+provides no confirmed case of a detected spike being independently corroborated by a
+staff-announced incident. This is a real, open limitation of the current design (message
+counting + coarse topic buckets), not a bug — the fixes worth considering (counting
+distinct users instead of messages; finer-grained topic clustering; excluding staff/
+broadcast-style messages from the count) are all identifiable from this audit, and are
+being deliberately deferred rather than fixed blind — see Tier 2/3 of the improvement
+plan for prioritization.
 
 **Live mode wired into `server.py`**: an APScheduler `BackgroundScheduler` runs
 `run_spike_check` hourly; each `/ask` question's topic (rule-based classification, no LLM
@@ -322,3 +365,155 @@ wrong and checking the raw chat for what actually happened.
 Verified live: the exact reported question now gets the correct answer at 80%
 confidence (`auto_reply`); no regression on 3 other known-correct queries re-checked
 after the threshold change.
+
+## Eval harness (`eval/run_eval.py`) — the missing scoreboard
+
+Every bug fix documented above was found the same way: manual testing at localhost:8000,
+by hand, against the raw data. That doesn't scale and leaves no durable signal — a fix for
+one query could silently regress another with nobody noticing. `eval/run_eval.py` (and
+the `data/qa_golden.csv` set it scores against) did not exist as code despite being named
+as the Phase 2 definition-of-done in `CLAUDE.md`/`BUILD_PLAN.md` and quoted here — this
+closes that gap and gives the project an actual scoreboard.
+
+**`data/qa_golden.csv`** (45 rows, private/gitignored like `golden_set.csv`): 35 questions
+paraphrased from the 40 curated KB entries (`expected_source=curated`, with a snippet that
+must appear in the winning entry's `problem` text), plus 10 escalation probes —
+3 genuinely off-topic (weather, food, gold prices) and 7 **on-domain questions with no
+curated KB entry** (password reset, PDF export, Slack/Teams integration, OCR language
+support, workflow cloning, concurrency limits, OAuth2 credentials) — this second group is
+deliberately adversarial: it's the same shape of question as the vmail-timezone bug above,
+designed to catch the next confident-wrong-answer gap before a user does.
+
+Metrics: retrieval hit@1/hit@3 against the expected KB entry, decision accuracy (a
+hand-labeled floor — `auto_reply` counts as beating an `suggest_to_staff` floor, but
+`escalate` requires an exact match, since nothing beats correctly declining to answer),
+**escalation precision/recall** (the headline metric for the confident-wrong-answer
+failure mode: a should-have-escalated question that instead gets a confident answer is a
+recall miss), and topic accuracy of the live rule-based classifier (`_rule_based_classify`,
+the same function the spike monitor uses).
+
+**First measured baseline** (`PYTHONPATH=. python eval/run_eval.py`, both LLM backends):
+
+| metric | `LLM_BACKEND=null` | `LLM_BACKEND=ollama` (qwen2.5:7b) |
+|---|---|---|
+| retrieval hit@1 | 1.00 (35/35) | 1.00 (35/35) |
+| retrieval hit@3 | 1.00 (35/35) | 1.00 (35/35) |
+| decision accuracy | 0.91 (41/45) | 0.96 (43/45) |
+| escalation precision | 1.00 | 1.00 |
+| **escalation recall** | **0.60 (6/10)** | **0.80 (8/10)** |
+| topic accuracy (rule classifier) | 0.27 (12/45) | 0.27 (12/45, LLM not used for this path) |
+
+Three findings, immediately actionable:
+
+1. **Retrieval itself is not the weak point** on this sample — bge-m3 finds the right entry
+   at rank 1 100% of the time, even for paraphrases. The system's failures are downstream
+   of retrieval, in the gate decision.
+2. **Escalation recall is the real number behind the "structural takeaway" above** — with
+   no LLM, 4 of 10 on-domain KB gaps get a confident `suggest_to_staff` answer instead of
+   correctly escalating (the exact vmail-timezone failure mode, now quantified rather than
+   anecdotal). The LLM's relevance grading catches 2 of those 4, lifting recall to 0.80 —
+   this is the clearest measured evidence yet that LLM grading is worth having even though
+   it's optional, while confirming the zero-LLM path (the hard CLAUDE.md constraint) still
+   answers real questions correctly, just with a higher false-answer rate on gaps.
+3. **Topic accuracy of the rule-based classifier (0.27) is meaningfully worse on
+   question-style text than on the original golden set (0.45, see Phase 2)** — many direct
+   questions in `qa_golden.csv` don't trip the hand-written `STAFF_RE`/`CUSTOMER_RE` sender
+   patterns that gate topic detection, so they fall through to `sender_type=unknown` →
+   `topic=none` regardless of real topic keywords present. This is a concrete, previously
+   unmeasured target for the classifier-improvement work.
+
+**Classifier eval restored** (`data/golden_set.csv`, rule-based `NullLLM`, reproducing
+Phase 2 above with runnable code): sender_type 0.485, intent 0.410, topic 0.450 — matches
+the previously-recorded numbers exactly, confirming the restored harness is faithful.
+
+**Query logging** (`src/monitor/query_log.py`, wired into `POST /ask`): every request now
+appends one JSON line to `data/processed/query_log.jsonl` (gitignored) — question, rewritten
+search query, retrieved candidates + scores, composite confidence, decision, latency. Every
+future manual test at localhost:8000 is now a durable, replayable data point, and the log is
+the raw material for growing `qa_golden.csv` from real usage instead of by hand.
+
+## LLM made mandatory + turn-type routing (2026-07-07)
+
+**User-reported:** every message — a greeting ("hi"), a real bug report, an off-topic
+question — went through the identical `orchestrate → retrieve → answer → critic` path.
+`orchestrate.py` was a no-op (just `.strip()`), so "hi" ran a full KB vector search,
+found nothing, and fell into the same generic escalation template as a genuinely
+unanswerable technical question (`NO_ANSWER` + "Chuyển KTV xử lý, độ tin cậy: 0%").
+
+**Two changes, decided together:**
+
+1. **`NullLLM` and every rule-based/template fallback branch removed.** LLM access
+   (Ollama, local) is now a hard requirement, not an optional enhancement — this
+   reverses the original CLAUDE.md constraint ("CPU only, possibly no LLM access at
+   all... must work with zero LLM calls as a fallback"). Removed: `src/llm/null_llm.py`,
+   the `isinstance(llm, NullLLM)` branches in `retrieval.py`/`answerer.py`, the
+   `_rule_based_classify` regex classifier in `pipeline/classify.py` (its system-message
+   detection, `is_system_noise`/`SYSTEM_RE`, stays — deterministic and independent of
+   the rule-based *classification* that got removed). `config.py`'s default
+   `LLM_BACKEND` changed `null` → `ollama`; the server/eval/scripts now fail loudly at
+   startup if Ollama is unreachable instead of silently degrading.
+
+2. **`orchestrate.py` became a real turn-type classifier**, not a no-op. One LLM call
+   classifies the incoming message into `new_problem` / `follow_up` / `chit_chat` /
+   `off_topic`, and — for the first two — rewrites it into a self-contained search
+   query in the same call (folding what used to be two separate LLM calls, rewrite +
+   grading, into one; no net increase in LLM calls per request). `graph.py` routes
+   `chit_chat`/`off_topic` straight to a new `direct_reply` node (one more LLM call for
+   a short natural reply) and `END` — never touching the KB, never gating, never firing
+   the alerter. `new_problem`/`follow_up` continue through the unchanged
+   `retrieve → answer → critic` shape. On any classification parse failure, orchestrate
+   falls back to `turn_type="new_problem"` with the raw question as the search query —
+   fails toward the existing safe behavior rather than guessing chit_chat and dropping a
+   real question.
+
+**Effect on the reported case**: "hi" now classifies as `chit_chat`, skips retrieval
+entirely, and gets a short natural reply instead of the 0%-confidence escalation
+template.
+
+**Side effect on spike-monitor topic tagging**: `server.py`'s `/ask` handler no longer
+has a free rule-based classify call available for tagging every question's topic.
+Fixed by deriving the topic from the retrieved KB entry when available
+(`state.retrieved[0].entry.topic`), falling back to one LLM classify call only when
+nothing was retrieved, and skipping tagging entirely for `chit_chat`/`off_topic` turns
+(they never touched the KB and shouldn't feed the spike monitor). This changes what's
+counted from "topic of the raw question" to "topic of the matched solution" — a
+deliberate tradeoff to avoid a second mandatory LLM call on every request.
+`eval/run_eval.py`'s `run_qa_eval` mirrors the same rule for its `actual_topic`
+scoring.
+
+**Eval harness updated for the new `direct_reply` decision** (`eval/run_eval.py`):
+`_DECISION_RANK` ranks `direct_reply` below `escalate` by default (a real technical
+question routed to `direct_reply` means the turn-classifier wrongly called it
+chit_chat/off_topic — worse than escalate, which at least recognizes "needs a human").
+But `qa_golden.csv`'s 3 genuinely off-topic probes (`expected_topic == "none"`: weather,
+food, gold prices) now correctly resolve via `direct_reply` instead of the old binary
+`escalate`, so `score_qa_row` treats `direct_reply` as a correct decline specifically
+for those rows — same semantics, better/more natural path.
+
+**Re-ran the full eval post-change** (`LLM_BACKEND=ollama`, `qwen2.5:7b`, live Ollama):
+
+| metric | before (RESULTS.md, Ollama) | after (this change) |
+|---|---|---|
+| retrieval hit@1 | 1.00 (35/35) | 0.86 (30/35) |
+| decision accuracy | 0.96 (43/45) | 0.84 (38/45) |
+| escalation recall | 0.80 (8/10) | 0.80 (8/10) |
+| escalation precision | 1.00 | 1.00 |
+
+**Escalation recall held at 0.80** — the 3 off-topic probes now correctly decline via
+`direct_reply` (previously via `escalate`), and the same 2 on-domain KB-gap questions
+("workflow PDF export", "Slack/Teams integration" — no curated entry exists for either)
+still slip through as `suggest_to_staff`, consistent with the pre-existing "40 curated
+entries cannot cover every real issue" limitation, not a new regression.
+
+**Retrieval hit@1 dropped and is unstable run-to-run** (1.00 baseline → 0.86 on the run
+above → 0.80 on an immediate re-run, with a *different* set of 5-7 missed rows each
+time — not the same questions failing repeatedly). This rules out a fixed regression
+tied to specific rows or to the turn-classifier's query rewrite, and points at ordinary
+LLM sampling variance in the CRAG relevance-grading step (`retrieval.py`'s `_llm_grade`,
+one live non-deterministic yes/no call per mid-band candidate, no fixed seed) — a
+small/mid model's veto call is noisy enough to swing hit@1 by several rows between
+identical runs. This variance predates this change (the grader was already live-called
+whenever `LLM_BACKEND=ollama`, per the original Phase 5 numbers) and was likely masked
+before by only ever reporting a single run. Not fixed here — worth averaging 3+ runs for
+a stable baseline number, or (longer term) reducing reliance on a single binary LLM
+veto in the ambiguous band.

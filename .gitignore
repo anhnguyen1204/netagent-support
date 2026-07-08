@@ -20,6 +20,10 @@ data/raw/
 data/golden_set.csv
 data/golden_set.xlsx
 
+# Golden Q&A eval set — kept private alongside golden_set.csv (same eval-integrity
+# rationale: don't want it tuned-to by anyone outside the project).
+data/qa_golden.csv
+
 # Local editor / tooling settings (not part of the project)
 .claude/
 

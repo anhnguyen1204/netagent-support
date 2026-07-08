@@ -1,7 +1,9 @@
 """B1: KB search + CRAG-style relevance grading.
 
-Calls kb.store.search. If NullLLM (or no LLM), skips relevance grading and thresholds on
-raw embedding similarity score. If an LLM is available, grades relevance per result.
+Calls kb.store.search, then grades relevance per ambiguous-band result (see
+LLM_GRADE_TRUST_SCORE below). `state.search_query` is already a self-contained query
+by the time this runs -- orchestrate.py resolves follow-up references in its
+classification call, so no rewriting happens here.
 """
 from __future__ import annotations
 
@@ -9,7 +11,6 @@ from src.agents.state import AgentState
 from src.kb.schema import ScoredKBEntry
 from src.kb.store import KBStore
 from src.llm.base import LLMClient
-from src.llm.null_llm import NullLLM
 
 # Results below this raw cosine similarity are dropped before grading -- clearly
 # unrelated matches never make it to the answerer regardless of LLM availability.
@@ -35,37 +36,6 @@ KB problem: {problem}
 KB solution: {solution}
 
 Could this entry help answer the question?"""
-
-REWRITE_PROMPT = """Given a conversation, rewrite the user's latest message into a single
-self-contained search query in Vietnamese that includes any context needed from earlier
-turns (e.g. resolve "cái đó", "vấn đề thứ hai", "còn nó thì sao"). Respond with ONLY the
-rewritten query, nothing else.
-
-Conversation so far:
-{history}
-
-Latest message: {question}
-
-Self-contained query:"""
-
-
-def _rewrite_followup(state: AgentState, llm: LLMClient) -> str:
-    """Turn a context-dependent follow-up into a standalone query using history. Returns
-    the original question unchanged if there is no history or the rewrite fails."""
-    if not state.history:
-        return state.question
-    history_text = "\n".join(
-        f"- User: {t.question}\n  Assistant: {t.answer[:200]}" for t in state.history
-    )
-    prompt = REWRITE_PROMPT.format(history=history_text, question=state.question)
-    try:
-        rewritten = llm.complete(prompt).strip()
-    except RuntimeError:
-        return state.question
-    # guard against a model that echoes the prompt or returns something empty/huge
-    if not rewritten or len(rewritten) > 300:
-        return state.question
-    return rewritten
 
 
 def _llm_grade(question: str, entry: ScoredKBEntry, llm: LLMClient) -> bool:
@@ -111,24 +81,19 @@ def _anchor_text(history: list) -> str:
     return " ".join(parts)
 
 
-def retrieve(state: AgentState, store: KBStore, llm: LLMClient | None, top_k: int) -> AgentState:
-    has_llm = llm is not None and not isinstance(llm, NullLLM)
-
-    # history-aware query rewriting: make a follow-up self-contained before searching, so
-    # embedding search finds the right entry ("cái thứ hai" alone matches nothing useful).
-    if has_llm and state.history:
-        state.search_query = _rewrite_followup(state, llm)
-    else:
-        state.search_query = state.question
+def retrieve(state: AgentState, store: KBStore, llm: LLMClient, top_k: int) -> AgentState:
+    # orchestrate.py already classified turn_type and rewrote a follow-up into a
+    # self-contained search_query; this node only runs for new_problem/follow_up
+    # (graph.py routes chit_chat/off_topic straight to direct_reply instead).
+    state.search_query = state.search_query or state.question
     query = state.search_query
 
     if not state.history:
         # first question: plain search, score is the confidence, fast trust-path grading.
         results = [r for r in store.search(query, top_k=top_k) if r.score >= MIN_RETRIEVAL_SCORE]
-        if has_llm:
-            results = [
-                r for r in results if r.score >= LLM_GRADE_TRUST_SCORE or _llm_grade(query, r, llm)
-            ]
+        results = [
+            r for r in results if r.score >= LLM_GRADE_TRUST_SCORE or _llm_grade(query, r, llm)
+        ]
         state.retrieved = results
         return state
 

@@ -1,16 +1,32 @@
-"""B3: compose grounded answer.
-
-Template-based if NullLLM: "Vấn đề tương tự đã gặp: {problem} -> Giải pháp: {solution}
-(nguồn: {source})". LLM-polished if available.
-"""
+"""B3: compose grounded answer from the top retrieved KB entry, via LLM polish."""
 from __future__ import annotations
 
 from src.agents.state import AgentState
-from src.kb.schema import ScoredKBEntry
 from src.llm.base import LLMClient
-from src.llm.null_llm import NullLLM
 
 NO_ANSWER = "Xin lỗi, hiện chưa tìm thấy giải pháp phù hợp trong cơ sở tri thức cho câu hỏi này."
+
+DIRECT_REPLY_PROMPT = """You are a Vietnamese-speaking assistant for the netAgent support
+chat, replying directly inside the chat UI (no separate human agent wraps your reply).
+
+The user's message is small talk or unrelated to netAgent/netFlow support (turn_type=
+{turn_type}). Reply naturally and briefly, matching the message's actual intent:
+- Greeting ("hi", "chào bạn"): greet back briefly and mention you can help with
+  netAgent/netFlow technical questions.
+- Thanks/acknowledgment ("cảm ơn", "ok"): a short, warm "không có gì" — do NOT treat
+  this as a joke or non-sequitur, and do not repeat the "I can help with X" pitch (it's
+  redundant after a thank-you).
+- Meta question about you ("bạn là ai"): briefly say you are a netAgent/netFlow support
+  assistant. Do NOT invent any other detail about yourself (company, vendor, model,
+  version) that isn't stated here.
+- Off-topic (unrelated to netAgent/netFlow, e.g. weather/food/general knowledge):
+  politely say you can only help with netAgent/netFlow support questions.
+Hard rules: reply ONLY in Vietnamese, never mixing in English or any other language.
+Keep it to 1-2 sentences. No greetings-within-greetings, no corporate sign-off filler.
+
+User's message: {question}
+
+Reply:"""
 
 POLISH_PROMPT = """You are answering a Vietnamese technical support question for the
 netAgent platform, inside a chat UI where the answer is shown directly (there is no
@@ -50,33 +66,26 @@ def _history_block(state: AgentState) -> str:
     return f"\nEarlier conversation:\n{lines}\n"
 
 
-def _template_answer(top: ScoredKBEntry) -> str:
-    return (
-        f"Vấn đề tương tự đã gặp: {top.entry.problem}\n"
-        f"→ Giải pháp: {top.entry.solution}\n"
-    )
-
-
-def answer(state: AgentState, llm: LLMClient | None) -> AgentState:
+def answer(state: AgentState, llm: LLMClient) -> AgentState:
     if not state.retrieved:
         state.answer = NO_ANSWER
         return state
 
     top = state.retrieved[0]
+    prompt = POLISH_PROMPT.format(
+        history_block=_history_block(state),
+        question=state.question,
+        problem=top.entry.problem,
+        solution=top.entry.solution,
+    )
+    polished = llm.complete(prompt).strip()
+    state.answer = f"{polished}\n(nguồn: {top.entry.source_thread_id})"
+    return state
 
-    if llm is not None and not isinstance(llm, NullLLM):
-        prompt = POLISH_PROMPT.format(
-            history_block=_history_block(state),
-            question=state.question,
-            problem=top.entry.problem,
-            solution=top.entry.solution,
-        )
-        try:
-            polished = llm.complete(prompt).strip()
-            state.answer = f"{polished}\n(nguồn: {top.entry.source_thread_id})"
-            return state
-        except RuntimeError:
-            pass  # LLM unavailable -- fall through to template, never a hard dependency
 
-    state.answer = _template_answer(top)
+def direct_reply(state: AgentState, llm: LLMClient) -> AgentState:
+    """chit_chat/off_topic path: no KB involved, just a short natural reply."""
+    prompt = DIRECT_REPLY_PROMPT.format(turn_type=state.turn_type, question=state.question)
+    state.answer = llm.complete(prompt).strip()
+    state.decision = "direct_reply"
     return state
